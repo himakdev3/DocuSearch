@@ -1,13 +1,22 @@
 # 📚 DocuSearch
 
-Find answers across PDF, Word, Text, and PowerPoint (.pptx) files in seconds using natural-language search.
+Find answers across PDF, Word, Text, and PowerPoint (.pptx) files fast using natural-language search.
 This app extracts and indexes document content locally, then returns the most relevant passages with page-level citations.
 Export results to CSV or JSON for quick sharing, reporting, or follow-up analysis.
 
+DocuSearch is a RAG-style document retrieval system focused on multi-document search, citation-first results, and fast source trace-back.
+
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Streamlit](https://img.shields.io/badge/streamlit-1.57+-red.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+![License](https://img.shields.io/badge/license-Non--Commercial-orange.svg)
 ![Search](https://img.shields.io/badge/app-document--search-brightgreen.svg)
+
+## 🎯 Why It Is Useful
+
+- Search across multiple documents at the same time instead of checking files one by one
+- Reduce manual document review time for research, compliance, and policy workflows
+- Jump back to the exact source page quickly with page-level citations and previews
+- Export clean result sets for handoff, reporting, and downstream analysis
 
 ## 🌟 Key Features
 
