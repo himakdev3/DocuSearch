@@ -1,0 +1,27 @@
+# Core dependencies
+streamlit>=1.57.0
+numpy>=2.2.0
+pandas>=2.3.0
+
+# Document processing
+PyPDF2>=3.0.1
+python-docx>=1.2.0
+python-pptx>=1.0.2
+
+# Image extraction & OCR (optional – requires `brew install tesseract` on macOS)
+pymupdf>=1.27.0
+pytesseract>=0.3.13
+Pillow>=12.0.0
+
+# Embeddings and Vector Search
+sentence-transformers>=5.4.0
+faiss-cpu>=1.13.0
+# For GPU support, replace faiss-cpu with: faiss-gpu>=1.7.4
+
+# Utilities
+python-dotenv>=1.2.0
+tqdm>=4.67.0
+
+# Development tools (optional)
+pytest>=8.0.0
+
