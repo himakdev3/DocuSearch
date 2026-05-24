@@ -1,0 +1,27 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Environment variables (keep .env.example, ignore actual .env)
+.env
+
+# Output / logs
+output/logs/
+output/plots/
+
+# Data uploads (don't commit user documents)
+data/pdfs/
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
