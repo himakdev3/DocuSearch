@@ -252,7 +252,12 @@ class RAGPipeline:
                     continue
 
             # OCR any embedded images in the PDF
-            chunk_counter = self._extract_and_ocr_pdf_images(pdf_bytes, doc_name, chunk_counter)
+            chunk_counter = self._extract_and_ocr_pdf_images(
+                pdf_bytes,
+                doc_name,
+                chunk_counter,
+                page_previews,
+            )
 
         except PyPDF2.errors.PdfReadError as e:
             failed_files.append((doc_name, f"Invalid or corrupted PDF: {e}"))
@@ -290,7 +295,13 @@ class RAGPipeline:
 
         return previews
 
-    def _extract_and_ocr_pdf_images(self, pdf_bytes: bytes, doc_name: str, chunk_counter: int) -> int:
+    def _extract_and_ocr_pdf_images(
+        self,
+        pdf_bytes: bytes,
+        doc_name: str,
+        chunk_counter: int,
+        page_previews: Optional[Dict[int, bytes]] = None,
+    ) -> int:
         """
         Extract embedded images from a PDF using PyMuPDF and run Tesseract OCR.
         Silently skips if PyMuPDF or pytesseract are not installed.
@@ -329,6 +340,8 @@ class RAGPipeline:
                                 "processed_at": datetime.now().isoformat(),
                                 "file_type": "pdf",
                                 "source": "image_ocr",
+                                "preview_kind": "pdf_page",
+                                "preview_image": (page_previews or {}).get(page_num),
                             },
                         )
                     except Exception as e:

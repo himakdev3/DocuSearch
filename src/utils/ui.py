@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import re
+import io
 from html import escape
 from datetime import datetime
 
@@ -77,10 +78,10 @@ def search_interface(pipeline, top_k, min_similarity_threshold: float = 0.0):
 
     _render_final_answer_panel(query, unique)
     _render_citation_summary_table(unique)
-    _render_results(unique)
-    _render_formatted_results_table(query, unique)
     export_rows = _build_export_rows(query, unique)
     _render_export_actions(export_rows)
+    _render_results(unique)
+    _render_formatted_results_table(query, unique)
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +248,24 @@ def _confidence_label(score: float) -> str:
     return "Low"
 
 
+def _two_line_key_excerpt(text: str) -> str:
+    """Build a short, readable key excerpt (roughly two lines) from top evidence."""
+    excerpt = _sentence_safe_excerpt(text).strip()
+    if not excerpt:
+        return ""
+
+    sentences = _split_sentences(excerpt)
+    if len(sentences) >= 2:
+        key_excerpt = " ".join(sentences[:2]).strip()
+    else:
+        key_excerpt = excerpt
+
+    key_excerpt = re.sub(r"\s+", " ", key_excerpt).strip()
+    if len(key_excerpt) > 260:
+        key_excerpt = key_excerpt[:257].rstrip() + "..."
+    return key_excerpt
+
+
 def _pages_by_document(unique) -> dict:
     """Build a mapping of document name to sorted unique pages."""
     pages: dict = {}
@@ -274,6 +293,17 @@ def _render_summary_metrics(panel: dict) -> None:
     </div>
     """
     st.markdown(metrics_markup, unsafe_allow_html=True)
+
+
+def _render_final_summary_table(panel: dict) -> None:
+    """Render a compact final summary table for quick scan."""
+    rows = [
+        {"Metric": "Confidence", "Value": f"{panel['confidence_label']} ({panel['confidence_score']:.0%})"},
+        {"Metric": "Source Coverage", "Value": f"{panel['doc_count']} docs / {panel['page_count']} pages"},
+        {"Metric": "Displayed Results", "Value": str(panel['displayed_results_count'])},
+    ]
+    st.markdown("**Final Summary Table**")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def _render_pages_reference(pages_by_doc: dict) -> None:
@@ -384,10 +414,12 @@ def _build_final_answer(query: str, unique) -> dict:
     unique_pages = {(chunk.doc_name, chunk.page_num) for chunk, _ in unique}
     top_sources = [f"{chunk.doc_name} p.{chunk.page_num}" for chunk, _ in top_items]
     pages_by_doc = _pages_by_document(unique)
+    key_excerpt = _two_line_key_excerpt(top_items[0][0].text) if top_items else ""
 
     return {
         "summary": summary,
         "summary_is_generated": summary_is_generated,
+        "key_excerpt": key_excerpt,
         "confidence_score": avg_top_score,
         "confidence_label": _confidence_label(avg_top_score),
         "doc_count": len(unique_docs),
@@ -409,7 +441,12 @@ def _render_final_answer_panel(query: str, unique) -> None:
     else:
         st.warning(panel["summary"])
 
+    if panel.get("key_excerpt"):
+        st.markdown("**Key excerpt from top citation**")
+        st.caption(panel["key_excerpt"])
+
     _render_summary_metrics(panel)
+    _render_final_summary_table(panel)
 
     _render_pages_reference(panel["pages_by_doc"])
 
@@ -435,16 +472,46 @@ def _render_results(unique) -> None:
             st.caption(f"Relevance score: {score:.0%}")
             preview_image = chunk.metadata.get("preview_image")
             preview_kind = chunk.metadata.get("preview_kind")
+            file_type = (chunk.metadata.get("file_type") or "").lower()
 
-            if preview_image and preview_kind == "pdf_page":
+            if _is_valid_preview_image(preview_image) and preview_kind == "pdf_page":
                 text_col, preview_col = st.columns([1.35, 1])
                 with text_col:
                     st.markdown(_sentence_safe_excerpt(chunk.text))
                 with preview_col:
                     st.markdown("**Page Preview**")
-                    st.image(preview_image, width="stretch")
+                    try:
+                        st.image(preview_image, use_container_width=True)
+                    except Exception:
+                        # Fallback for older Streamlit image APIs.
+                        st.image(preview_image)
             else:
                 st.markdown(_sentence_safe_excerpt(chunk.text))
+                st.caption(_preview_unavailable_message(file_type, preview_kind))
+
+
+def _is_valid_preview_image(preview_image) -> bool:
+    """Return True when preview payload looks like a renderable image."""
+    if preview_image is None:
+        return False
+
+    if isinstance(preview_image, (bytes, bytearray)):
+        return len(preview_image) > 0
+
+    if isinstance(preview_image, io.BytesIO):
+        return preview_image.getbuffer().nbytes > 0
+
+    if isinstance(preview_image, str):
+        return preview_image.strip() not in {"", "0"}
+
+    return False
+
+
+def _preview_unavailable_message(file_type: str, preview_kind: str) -> str:
+    """Return a short user-facing reason when preview cannot be shown."""
+    if preview_kind == "pdf_page" or file_type == "pdf":
+        return "Preview unavailable for this page."
+    return "Preview unavailable for this result type."
 
 
 def _render_formatted_results_table(query: str, unique) -> None:
@@ -471,13 +538,13 @@ def _render_formatted_results_table(query: str, unique) -> None:
 
 def _build_export_rows(query: str, unique) -> list:
     """Build serializable row data for CSV/JSON exports."""
-    exported_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    exported_at = datetime.now().strftime("%m/%d/%Y %H:%M")
     rows = []
     for idx, (chunk, score) in enumerate(unique, 1):
         excerpt = _sentence_safe_excerpt(chunk.text)
         rows.append(
             {
-                "query": query,
+                "example query": query,
                 "rank": idx,
                 "document": chunk.doc_name,
                 "page": chunk.page_num,
@@ -501,7 +568,7 @@ def _render_export_actions(export_rows: list) -> None:
     with col1:
         st.download_button(
             "⬇️ CSV",
-            data=export_df.to_csv(index=False).encode("utf-8"),
+            data=export_df.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"search_results_{ts}.csv",
             mime="text/csv",
             use_container_width=True,
