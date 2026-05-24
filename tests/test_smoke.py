@@ -15,3 +15,4 @@ def test_runtime_environment_sets_expected_vars() -> None:
     assert os.environ["TOKENIZERS_PARALLELISM"] == "false"
     assert os.environ["OMP_NUM_THREADS"] == "1"
     assert os.environ["MKL_NUM_THREADS"] == "1"
+    assert os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] == "none"

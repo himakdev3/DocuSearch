@@ -69,7 +69,7 @@ docusearch/
 
 ```mermaid
 graph LR
-   A[Document Upload] --> B[Text Extraction]
+    A[Document Upload] --> B[Text Extraction]
     B --> C[Intelligent Chunking]
     C --> D[Embedding Generation]
     D --> E[FAISS Index]
