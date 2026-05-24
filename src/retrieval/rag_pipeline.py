@@ -48,6 +48,12 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_QUERY_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how",
+    "i", "in", "is", "it", "me", "of", "on", "or", "that", "the", "to",
+    "was", "what", "when", "where", "which", "who", "why", "with", "you",
+}
+
 
 @dataclass
 class DocumentChunk:
@@ -215,6 +221,7 @@ class RAGPipeline:
             import io
             pdf_bytes = pdf_file.read()
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
+            page_previews = self._build_pdf_page_previews(pdf_bytes)
 
             if len(pdf_reader.pages) == 0:
                 logger.warning(f"PDF '{doc_name}' has no pages")
@@ -236,6 +243,8 @@ class RAGPipeline:
                             "processed_at": datetime.now().isoformat(),
                             "file_type": "pdf",
                             "source": "text",
+                            "preview_kind": "pdf_page",
+                            "preview_image": page_previews.get(page_num),
                         },
                     )
                 except Exception as e:
@@ -249,6 +258,37 @@ class RAGPipeline:
             failed_files.append((doc_name, f"Invalid or corrupted PDF: {e}"))
 
         return chunk_counter
+
+    def _build_pdf_page_previews(self, pdf_bytes: bytes) -> Dict[int, bytes]:
+        """Render small thumbnail previews for PDF pages."""
+        try:
+            import fitz  # PyMuPDF
+            from PIL import Image
+            import io
+        except ImportError:
+            logger.debug("PyMuPDF or Pillow not available – skipping PDF previews")
+            return {}
+
+        previews: Dict[int, bytes] = {}
+        try:
+            pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            for page_num, page in enumerate(pdf_doc, start=1):
+                try:
+                    pixmap = page.get_pixmap(matrix=fitz.Matrix(1.6, 1.6), alpha=False)
+                    image = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("RGB")
+                    image.thumbnail((720, 960))
+
+                    output = io.BytesIO()
+                    image.save(output, format="JPEG", quality=78, optimize=True)
+                    previews[page_num] = output.getvalue()
+                except Exception as e:
+                    logger.debug(f"Failed to render preview for PDF page {page_num}: {e}")
+                    continue
+            pdf_doc.close()
+        except Exception as e:
+            logger.warning(f"Failed to create PDF previews: {e}")
+
+        return previews
 
     def _extract_and_ocr_pdf_images(self, pdf_bytes: bytes, doc_name: str, chunk_counter: int) -> int:
         """
@@ -572,7 +612,7 @@ class RAGPipeline:
             List of text chunks
         """
         # Clean text
-        text = re.sub(r'\s+', ' ', text).strip()
+        text = self._normalize_text_for_chunking(text)
         
         if len(text) <= self.chunk_size:
             return [text]
@@ -600,6 +640,70 @@ class RAGPipeline:
                 start += 1
         
         return chunks
+
+    def _normalize_text_for_chunking(self, text: str) -> str:
+        """Normalize OCR/book text to improve chunk quality before indexing."""
+        normalized = text or ""
+        normalized = normalized.replace("\r", "\n")
+
+        # Fix merged boundaries like "AIAmong" that appear in extracted PDF text.
+        normalized = re.sub(r"([A-Z]{2,})([A-Z][a-z])", r"\1 \2", normalized)
+
+        # Repair split words from PDF extraction/OCR.
+        normalized = re.sub(r"(\w)-\s+(\w)", r"\1\2", normalized)
+
+        # Remove URLs and common book-preview/footer clutter.
+        normalized = re.sub(r"https?://\S+", " ", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\bMore books\s*:?[^\n]*", " ", normalized, flags=re.IGNORECASE)
+
+        # Remove leading all-caps title/header fragments (generic, not book-specific).
+        normalized = re.sub(
+            r"^(?:\s*[A-Z][A-Z0-9&'()/:;,-]{2,}(?:\s+[A-Z][A-Z0-9&'()/:;,-]{2,}){3,18})(?=\s+[A-Z][a-z]|\s+[A-Z]{2,}\b)",
+            " ",
+            normalized,
+        )
+
+        # Collapse excessive whitespace.
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized
+
+    def _query_terms(self, query: str) -> set:
+        """Extract meaningful lexical terms from query for lightweight reranking."""
+        tokens = re.findall(r"[A-Za-z0-9]+", query.lower())
+        return {token for token in tokens if len(token) >= 3 and token not in _QUERY_STOPWORDS}
+
+    def _lexical_overlap_score(self, query_terms: set, text: str) -> float:
+        """Compute lexical overlap in range [0, 1] between query terms and chunk text."""
+        if not query_terms:
+            return 0.0
+        words = set(re.findall(r"[A-Za-z0-9]+", text.lower()))
+        if not words:
+            return 0.0
+        overlap = len(query_terms & words)
+        return overlap / len(query_terms)
+
+    def _noise_penalty(self, text: str) -> float:
+        """Penalize chunk text that looks like headings/authors instead of explanatory content."""
+        penalty = 0.0
+        collapsed = re.sub(r"\s+", " ", text).strip()
+        if not collapsed:
+            return 0.2
+
+        words = re.findall(r"[A-Za-z']+", collapsed)
+        if not words:
+            return 0.2
+
+        upper_ratio = sum(1 for word in words if word.isupper() and len(word) > 2) / len(words)
+        if upper_ratio > 0.35:
+            penalty += 0.08
+
+        lowered = collapsed.lower()
+        if "use case" in lowered and "retrieval augmented generation" in lowered:
+            penalty += 0.03
+        if lowered.startswith("chapter") or lowered.startswith("table of contents"):
+            penalty += 0.05
+
+        return min(penalty, 0.2)
     
     def generate_embeddings(self, batch_size: int = 32, show_progress: bool = True) -> None:
         """
@@ -747,15 +851,23 @@ class RAGPipeline:
             if query_embedding is None or len(query_embedding) == 0:
                 raise SearchError("Failed to generate query embedding")
             
-            # Search
-            scores, indices = self.index.search(query_embedding, top_k)
-            
-            # Return results with scores
-            results = [
-                (self.documents[idx], float(score))
-                for idx, score in zip(indices[0], scores[0])
-                if idx >= 0
-            ]
+            # Search extra candidates then rerank with lexical overlap and noise penalty.
+            search_k = min(len(self.documents), max(top_k * 4, top_k + 8))
+            scores, indices = self.index.search(query_embedding, search_k)
+
+            query_terms = self._query_terms(query)
+            reranked = []
+            for idx, vector_score in zip(indices[0], scores[0]):
+                if idx < 0:
+                    continue
+                chunk = self.documents[idx]
+                lexical_score = self._lexical_overlap_score(query_terms, chunk.text)
+                noise_penalty = self._noise_penalty(chunk.text)
+                combined_score = (0.82 * float(vector_score)) + (0.25 * lexical_score) - noise_penalty
+                combined_score = max(0.0, min(1.0, combined_score))
+                reranked.append((chunk, combined_score))
+
+            results = sorted(reranked, key=lambda item: item[1], reverse=True)[:top_k]
 
             if min_score is not None:
                 results = [(doc, score) for doc, score in results if score >= min_score]

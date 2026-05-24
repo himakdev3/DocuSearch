@@ -178,9 +178,106 @@ def _get_custom_css() -> str:
         font-weight: 600;
         color: #174a88;
     }
+    .citation-summary-card {
+        margin: 0.9rem 0 1rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(30, 136, 229, 0.16);
+        background: linear-gradient(180deg, rgba(237, 247, 255, 0.97) 0%, rgba(224, 241, 255, 0.97) 100%);
+        box-shadow: 0 10px 22px rgba(30, 136, 229, 0.1);
+        padding: 0.9rem 1rem 1rem;
+    }
+    .citation-summary-title {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #0D47A1;
+        margin-bottom: 0.65rem;
+    }
+    .citation-summary-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 0.85rem;
+        margin-bottom: 0.75rem;
+    }
+    .citation-legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        font-size: 0.88rem;
+        color: #335c85;
+    }
+    .citation-summary-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        overflow: hidden;
+        border-radius: 0.85rem;
+        background: rgba(255, 255, 255, 0.92);
+    }
+    .citation-summary-table thead th {
+        text-align: left;
+        padding: 0.7rem 0.75rem;
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: #0D47A1;
+        background: rgba(30, 136, 229, 0.08);
+        border-bottom: 1px solid rgba(30, 136, 229, 0.14);
+    }
+    .citation-summary-table tbody td {
+        padding: 0.64rem 0.75rem;
+        font-size: 0.92rem;
+        color: #24476b;
+        border-bottom: 1px solid rgba(30, 136, 229, 0.1);
+    }
+    .citation-summary-table tbody tr:last-child td {
+        border-bottom: none;
+    }
+    .citation-summary-table tbody tr:hover td {
+        background: rgba(227, 242, 253, 0.5);
+    }
+    .citation-score-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 4.2rem;
+        padding: 0.18rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.82rem;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        border: 1px solid transparent;
+    }
+    .citation-score-high {
+        background: #E8F5E9;
+        color: #2E7D32;
+        border-color: rgba(46, 125, 50, 0.18);
+    }
+    .citation-score-medium {
+        background: #FFF8E1;
+        color: #8D6E00;
+        border-color: rgba(141, 110, 0, 0.18);
+    }
+    .citation-score-low {
+        background: #FFEBEE;
+        color: #C62828;
+        border-color: rgba(198, 40, 40, 0.18);
+    }
+    .result-preview-label {
+        font-size: 0.88rem;
+        font-weight: 700;
+        color: #0D47A1;
+        margin: 0.15rem 0 0.45rem;
+    }
     @media (max-width: 900px) {
         .summary-metrics-grid {
             grid-template-columns: 1fr;
+        }
+        .citation-summary-legend {
+            gap: 0.4rem 0.6rem;
+        }
+        .citation-summary-table thead th,
+        .citation-summary-table tbody td {
+            padding: 0.55rem 0.5rem;
+            font-size: 0.86rem;
         }
     }
     </style>

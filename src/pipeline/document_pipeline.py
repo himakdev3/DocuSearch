@@ -69,7 +69,7 @@ def _load_documents(pipeline: RAGPipeline, uploaded_files: List, progress_bar, s
 
 def _generate_embeddings(pipeline: RAGPipeline, progress_bar, status_text) -> None:
     """Generate vector embeddings for loaded document chunks."""
-    status_text.text("Generating embeddings...")
+    status_text.text("Loading search engine...")
     progress_bar.progress(50)
     pipeline.generate_embeddings(batch_size=config.embedding_batch_size, show_progress=False)
 

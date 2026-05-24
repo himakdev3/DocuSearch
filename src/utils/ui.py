@@ -2,7 +2,21 @@ import streamlit as st
 import pandas as pd
 import json
 import re
+from html import escape
 from datetime import datetime
+
+
+_ENCODING_FIXES = {
+    "â€™": "'",
+    "â€˜": "'",
+    "â€œ": '"',
+    "â€": '"',
+    "â€“": "-",
+    "â€”": "-",
+    "â€¦": "...",
+    "LL Ms": "LLMs",
+    "incontext": "in-context",
+}
 
 
 def _score_color(score: float) -> str:
@@ -11,6 +25,14 @@ def _score_color(score: float) -> str:
     if score >= 0.40:
         return "🟡"
     return "🔴"
+
+
+def _score_band(score: float) -> str:
+    if score >= 0.55:
+        return "high"
+    if score >= 0.40:
+        return "medium"
+    return "low"
 
 
 def search_interface(pipeline, top_k, min_similarity_threshold: float = 0.0):
@@ -54,7 +76,9 @@ def search_interface(pipeline, top_k, min_similarity_threshold: float = 0.0):
         return
 
     _render_final_answer_panel(query, unique)
+    _render_citation_summary_table(unique)
     _render_results(unique)
+    _render_formatted_results_table(query, unique)
     export_rows = _build_export_rows(query, unique)
     _render_export_actions(export_rows)
 
@@ -80,6 +104,15 @@ def _sentence_safe_excerpt(text: str) -> str:
     # Remove known OCR/book-preview noise such as truncated short links.
     cleaned = re.sub(r"More books:\s*https?://[^\s]*", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"https?://[A-Za-z0-9.-]*\.[A-Za-z]?\b", "", cleaned)
+    cleaned = re.sub(r"([A-Z]{2,})([A-Z][a-z])", r"\1 \2", cleaned)
+    cleaned = re.sub(
+        r"^(?:\s*[A-Z][A-Z0-9&'()/:;,-]{2,}(?:\s+[A-Z][A-Z0-9&'()/:;,-]{2,}){3,18})(?=\s+[A-Z][a-z]|\s+[A-Z]{2,}\b)",
+        "",
+        cleaned,
+    )
+    cleaned = re.sub(r"\bby\s+[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3}(?:\s*,\s*[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3}){1,5}", "", cleaned)
+    for bad, good in _ENCODING_FIXES.items():
+        cleaned = cleaned.replace(bad, good)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return cleaned
@@ -266,6 +299,58 @@ def _render_pages_reference(pages_by_doc: dict) -> None:
     st.markdown(markup, unsafe_allow_html=True)
 
 
+def _render_citation_summary_table(unique) -> None:
+    """Render a compact citation-first summary table in a styled section."""
+    if not unique:
+        return
+
+    rows = []
+    for chunk, score in unique:
+        rows.append(
+            {
+                "source": chunk.doc_name,
+                "page": chunk.page_num,
+                "score": score,
+            }
+        )
+
+    rows = sorted(rows, key=lambda row: row["score"], reverse=True)
+    table_rows = "".join(
+        (
+            "<tr>"
+            f"<td>{escape(row['source'])}</td>"
+            f"<td>{row['page']}</td>"
+            f"<td><span class='citation-score-badge citation-score-{_score_band(row['score'])}'>{row['score']:.0%}</span></td>"
+            "</tr>"
+        )
+        for row in rows
+    )
+
+    table_markup = f"""
+    <div class="citation-summary-card">
+        <div class="citation-summary-title">Citation Summary</div>
+        <div class="citation-summary-legend">
+            <span class="citation-legend-item"><span class="citation-score-badge citation-score-high">55%+</span> High</span>
+            <span class="citation-legend-item"><span class="citation-score-badge citation-score-medium">40-55%</span> Medium</span>
+            <span class="citation-legend-item"><span class="citation-score-badge citation-score-low">Below 40%</span> Low</span>
+        </div>
+        <table class="citation-summary-table">
+            <thead>
+                <tr>
+                    <th>Source Name</th>
+                    <th>Citation Page Number</th>
+                    <th>Relevance score</th>
+                </tr>
+            </thead>
+            <tbody>
+                {table_rows}
+            </tbody>
+        </table>
+    </div>
+    """
+    st.markdown(table_markup, unsafe_allow_html=True)
+
+
 def _build_final_answer(query: str, unique) -> dict:
     """Create an answer summary plus confidence and source coverage details."""
     top_items = unique[:5]
@@ -278,18 +363,23 @@ def _build_final_answer(query: str, unique) -> dict:
         if sentence and sentence not in selected_sentences:
             selected_sentences.append(sentence)
 
-    if selected_sentences:
+    avg_top_score = sum(score for _, score in top_items) / max(len(top_items), 1)
+
+    if selected_sentences and avg_top_score >= 0.45:
         summary = " ".join(selected_sentences[:2])
+        summary_is_generated = True
     else:
+        best_locations = ", ".join(f"{chunk.doc_name} p.{chunk.page_num}" for chunk, _ in top_items[:3])
         summary = (
-            "Top matching content was found in the cited pages below. "
-            "Review the highlighted results for the most relevant passages."
+            "Most relevant passages were found in these locations: "
+            f"{best_locations}. "
+            "Use the cited snippets below to verify where the answer appears."
         )
+        summary_is_generated = False
 
     if len(summary) > 420:
         summary = summary[:417].rstrip() + "..."
 
-    avg_top_score = sum(score for _, score in top_items) / max(len(top_items), 1)
     unique_docs = {chunk.doc_name for chunk, _ in unique}
     unique_pages = {(chunk.doc_name, chunk.page_num) for chunk, _ in unique}
     top_sources = [f"{chunk.doc_name} p.{chunk.page_num}" for chunk, _ in top_items]
@@ -297,7 +387,7 @@ def _build_final_answer(query: str, unique) -> dict:
 
     return {
         "summary": summary,
-        "summary_is_generated": bool(selected_sentences),
+        "summary_is_generated": summary_is_generated,
         "confidence_score": avg_top_score,
         "confidence_label": _confidence_label(avg_top_score),
         "doc_count": len(unique_docs),
@@ -343,7 +433,40 @@ def _render_results(unique) -> None:
 
         with st.expander(label, expanded=(idx == 1)):
             st.caption(f"Relevance score: {score:.0%}")
-            st.markdown(_sentence_safe_excerpt(chunk.text))
+            preview_image = chunk.metadata.get("preview_image")
+            preview_kind = chunk.metadata.get("preview_kind")
+
+            if preview_image and preview_kind == "pdf_page":
+                text_col, preview_col = st.columns([1.35, 1])
+                with text_col:
+                    st.markdown(_sentence_safe_excerpt(chunk.text))
+                with preview_col:
+                    st.markdown("**Page Preview**")
+                    st.image(preview_image, width="stretch")
+            else:
+                st.markdown(_sentence_safe_excerpt(chunk.text))
+
+
+def _render_formatted_results_table(query: str, unique) -> None:
+    """Render a cleaner table view for quick reading and copying."""
+    rows = []
+    for idx, (chunk, score) in enumerate(unique, 1):
+        rows.append(
+            {
+                "Rank": idx,
+                "Source": chunk.doc_name,
+                "Page": chunk.page_num,
+                "Relevance": f"{score:.0%}",
+                "Snippet": _sentence_safe_excerpt(chunk.text),
+            }
+        )
+
+    if not rows:
+        return
+
+    st.markdown("### Search Results")
+    st.caption("Clean, copy-friendly view of where your answer appears.")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def _build_export_rows(query: str, unique) -> list:
@@ -359,9 +482,7 @@ def _build_export_rows(query: str, unique) -> list:
                 "document": chunk.doc_name,
                 "page": chunk.page_num,
                 "score": round(score, 4),
-                "source": chunk.metadata.get("source", "text"),
                 "text": excerpt,
-                "raw_chunk_text": chunk.text,
                 "exported_at": exported_at,
             }
         )
