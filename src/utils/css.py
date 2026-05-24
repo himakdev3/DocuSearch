@@ -84,29 +84,6 @@ def _get_custom_css() -> str:
         background: linear-gradient(180deg, #4DA3FF 0%, #1E88E5 55%, #1565C0 100%);
         color: #ffffff;
     }
-    .stDownloadButton>button {
-        width: 100%;
-        border: 1px solid rgba(21, 101, 192, 0.22);
-        border-radius: 999px;
-        background: linear-gradient(180deg, #4DA3FF 0%, #1E88E5 55%, #1565C0 100%);
-        color: #ffffff;
-        font-weight: 600;
-        box-shadow: 0 10px 24px var(--brand-blue-glow), inset 0 1px 0 rgba(255, 255, 255, 0.28);
-        transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
-    }
-    .stDownloadButton>button:hover {
-        transform: translateY(-1px);
-        filter: brightness(1.03);
-        box-shadow: 0 14px 30px rgba(21, 101, 192, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.34);
-        color: #ffffff;
-        border-color: rgba(21, 101, 192, 0.28);
-    }
-    .stDownloadButton>button:focus,
-    .stDownloadButton>button:focus-visible {
-        outline: none;
-        color: #ffffff;
-        box-shadow: 0 0 0 0.18rem rgba(100, 181, 246, 0.35), 0 14px 30px rgba(21, 101, 192, 0.34);
-    }
     div[data-testid="stProgressBar"] > div > div {
         background: linear-gradient(90deg, #90CAF9 0%, #42A5F5 35%, #1E88E5 70%, #1565C0 100%);
         border-radius: 999px;

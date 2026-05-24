@@ -222,6 +222,7 @@ class RAGPipeline:
             pdf_bytes = pdf_file.read()
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
             page_previews = self._build_pdf_page_previews(pdf_bytes)
+            page_labels = self._extract_pdf_page_labels(pdf_bytes)
 
             if len(pdf_reader.pages) == 0:
                 logger.warning(f"PDF '{doc_name}' has no pages")
@@ -230,26 +231,41 @@ class RAGPipeline:
 
             logger.info(f"Processing PDF '{doc_name}' ({len(pdf_reader.pages)} pages)")
 
+            extracted_page_texts: Dict[int, str] = {}
+            printed_candidates: Dict[int, int] = {}
+
             for page_num, page in enumerate(pdf_reader.pages, start=1):
                 try:
                     text = page.extract_text()
-                    chunk_counter = self._append_chunks_from_text(
-                        text=text,
-                        doc_name=doc_name,
-                        page_num=page_num,
-                        chunk_counter=chunk_counter,
-                        metadata={
-                            "total_pages": len(pdf_reader.pages),
-                            "processed_at": datetime.now().isoformat(),
-                            "file_type": "pdf",
-                            "source": "text",
-                            "preview_kind": "pdf_page",
-                            "preview_image": page_previews.get(page_num),
-                        },
-                    )
+                    extracted_page_texts[page_num] = text or ""
+
+                    candidate = self._extract_printed_page_candidate(text)
+                    if candidate is not None:
+                        printed_candidates[page_num] = candidate
                 except Exception as e:
                     logger.error(f"Error processing page {page_num} of '{doc_name}': {e}")
                     continue
+
+            printed_page_map = self._resolve_printed_page_map(printed_candidates, len(pdf_reader.pages))
+
+            for page_num, text in extracted_page_texts.items():
+                displayed_page_num = printed_page_map.get(page_num) or page_labels.get(page_num) or page_num
+                chunk_counter = self._append_chunks_from_text(
+                    text=text,
+                    doc_name=doc_name,
+                    page_num=page_num,
+                    chunk_counter=chunk_counter,
+                    metadata={
+                        "total_pages": len(pdf_reader.pages),
+                        "processed_at": datetime.now().isoformat(),
+                        "file_type": "pdf",
+                        "source": "text",
+                        "preview_kind": "pdf_page",
+                        "preview_page_num": page_num,
+                        "printed_page_num": displayed_page_num,
+                        "preview_image": page_previews.get(page_num),
+                    },
+                )
 
             # OCR any embedded images in the PDF
             chunk_counter = self._extract_and_ocr_pdf_images(
@@ -257,12 +273,108 @@ class RAGPipeline:
                 doc_name,
                 chunk_counter,
                 page_previews,
+                printed_page_map,
+                page_labels,
             )
 
         except PyPDF2.errors.PdfReadError as e:
             failed_files.append((doc_name, f"Invalid or corrupted PDF: {e}"))
 
         return chunk_counter
+
+    def _extract_printed_page_candidate(self, text: str) -> Optional[int]:
+        """Try to extract a human-visible printed page number from page footer text."""
+        if not text:
+            return None
+
+        lines = [line.strip() for line in text.splitlines() if line and line.strip()]
+        if not lines:
+            return None
+
+        # Footer numbers are usually in the last few non-empty lines.
+        tail_lines = lines[-8:]
+        patterns = [
+            r"(?i)^chapter\s+\d+.*?\b(\d{1,4})\s*$",
+            r"^(\d{1,4})$",
+            r"\b(\d{1,4})\s*$",
+        ]
+
+        for line in reversed(tail_lines):
+            lowered = line.lower()
+            if "copyright" in lowered:
+                continue
+
+            for pattern in patterns:
+                match = re.search(pattern, line)
+                if not match:
+                    continue
+
+                try:
+                    value = int(match.group(1))
+                except (TypeError, ValueError):
+                    continue
+
+                if 1 <= value <= 5000:
+                    return value
+
+        return None
+
+    def _extract_pdf_page_labels(self, pdf_bytes: bytes) -> Dict[int, int]:
+        """Extract logical page labels from PDF metadata when available (e.g., label 35 on physical page 41)."""
+        try:
+            import fitz  # PyMuPDF
+        except ImportError:
+            return {}
+
+        labels: Dict[int, int] = {}
+        try:
+            pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            for page_num, page in enumerate(pdf_doc, start=1):
+                raw_label = ""
+                try:
+                    if hasattr(page, "get_label"):
+                        raw_label = page.get_label() or ""
+                except Exception:
+                    raw_label = ""
+
+                if not raw_label:
+                    continue
+
+                match = re.search(r"(\d{1,4})$", str(raw_label).strip())
+                if not match:
+                    continue
+
+                value = int(match.group(1))
+                if value > 0:
+                    labels[page_num] = value
+
+            pdf_doc.close()
+        except Exception as e:
+            logger.debug(f"Failed to extract PDF page labels: {e}")
+
+        return labels
+
+    def _resolve_printed_page_map(self, candidates: Dict[int, int], total_pages: int) -> Dict[int, int]:
+        """Resolve a stable PDF-page -> printed-page mapping from detected footer candidates."""
+        if len(candidates) < 3:
+            return {}
+
+        offsets: Dict[int, int] = {}
+        for pdf_page, printed_page in candidates.items():
+            offset = pdf_page - printed_page
+            offsets[offset] = offsets.get(offset, 0) + 1
+
+        best_offset, support = max(offsets.items(), key=lambda item: item[1])
+        if support < 3:
+            return {}
+
+        mapping: Dict[int, int] = {}
+        for pdf_page in range(1, total_pages + 1):
+            printed_page = pdf_page - best_offset
+            if printed_page >= 1:
+                mapping[pdf_page] = printed_page
+
+        return mapping
 
     def _build_pdf_page_previews(self, pdf_bytes: bytes) -> Dict[int, bytes]:
         """Render small thumbnail previews for PDF pages."""
@@ -301,6 +413,8 @@ class RAGPipeline:
         doc_name: str,
         chunk_counter: int,
         page_previews: Optional[Dict[int, bytes]] = None,
+        printed_page_map: Optional[Dict[int, int]] = None,
+        page_labels: Optional[Dict[int, int]] = None,
     ) -> int:
         """
         Extract embedded images from a PDF using PyMuPDF and run Tesseract OCR.
@@ -341,6 +455,10 @@ class RAGPipeline:
                                 "file_type": "pdf",
                                 "source": "image_ocr",
                                 "preview_kind": "pdf_page",
+                                "preview_page_num": page_num,
+                                "printed_page_num": (printed_page_map or {}).get(page_num)
+                                or (page_labels or {}).get(page_num)
+                                or page_num,
                                 "preview_image": (page_previews or {}).get(page_num),
                             },
                         )

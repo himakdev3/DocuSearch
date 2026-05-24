@@ -36,6 +36,24 @@ def _score_band(score: float) -> str:
     return "low"
 
 
+def _display_page_num(chunk) -> int:
+    """Return user-facing page number, preferring printed page metadata when available."""
+    printed = chunk.metadata.get("printed_page_num")
+    try:
+        printed_int = int(printed)
+        if printed_int > 0:
+            return printed_int
+    except (TypeError, ValueError):
+        pass
+    return chunk.page_num
+
+
+def _display_page_text(chunk) -> str:
+    """Return user-facing page label text."""
+    shown = _display_page_num(chunk)
+    return str(shown)
+
+
 def search_interface(pipeline, top_k, min_similarity_threshold: float = 0.0):
     """Render search controls, results, and export actions."""
     query = st.text_input(
@@ -78,10 +96,10 @@ def search_interface(pipeline, top_k, min_similarity_threshold: float = 0.0):
 
     _render_final_answer_panel(query, unique)
     _render_citation_summary_table(unique)
-    export_rows = _build_export_rows(query, unique)
-    _render_export_actions(export_rows)
     _render_results(unique)
     _render_formatted_results_table(query, unique)
+    export_rows = _build_export_rows(query, unique)
+    _render_export_actions(export_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +288,11 @@ def _pages_by_document(unique) -> dict:
     """Build a mapping of document name to sorted unique pages."""
     pages: dict = {}
     for chunk, _ in unique:
-        pages.setdefault(chunk.doc_name, set()).add(chunk.page_num)
-    return {doc: sorted(page_nums) for doc, page_nums in pages.items()}
+        pages.setdefault(chunk.doc_name, {})[chunk.page_num] = _display_page_text(chunk)
+    return {
+        doc: [label for _, label in sorted(page_map.items(), key=lambda item: item[0])]
+        for doc, page_map in pages.items()
+    }
 
 
 def _render_summary_metrics(panel: dict) -> None:
@@ -293,17 +314,6 @@ def _render_summary_metrics(panel: dict) -> None:
     </div>
     """
     st.markdown(metrics_markup, unsafe_allow_html=True)
-
-
-def _render_final_summary_table(panel: dict) -> None:
-    """Render a compact final summary table for quick scan."""
-    rows = [
-        {"Metric": "Confidence", "Value": f"{panel['confidence_label']} ({panel['confidence_score']:.0%})"},
-        {"Metric": "Source Coverage", "Value": f"{panel['doc_count']} docs / {panel['page_count']} pages"},
-        {"Metric": "Displayed Results", "Value": str(panel['displayed_results_count'])},
-    ]
-    st.markdown("**Final Summary Table**")
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def _render_pages_reference(pages_by_doc: dict) -> None:
@@ -339,7 +349,7 @@ def _render_citation_summary_table(unique) -> None:
         rows.append(
             {
                 "source": chunk.doc_name,
-                "page": chunk.page_num,
+                "page": _display_page_text(chunk),
                 "score": score,
             }
         )
@@ -399,7 +409,7 @@ def _build_final_answer(query: str, unique) -> dict:
         summary = " ".join(selected_sentences[:2])
         summary_is_generated = True
     else:
-        best_locations = ", ".join(f"{chunk.doc_name} p.{chunk.page_num}" for chunk, _ in top_items[:3])
+        best_locations = ", ".join(f"{chunk.doc_name} p.{_display_page_text(chunk)}" for chunk, _ in top_items[:3])
         summary = (
             "Most relevant passages were found in these locations: "
             f"{best_locations}. "
@@ -412,7 +422,7 @@ def _build_final_answer(query: str, unique) -> dict:
 
     unique_docs = {chunk.doc_name for chunk, _ in unique}
     unique_pages = {(chunk.doc_name, chunk.page_num) for chunk, _ in unique}
-    top_sources = [f"{chunk.doc_name} p.{chunk.page_num}" for chunk, _ in top_items]
+    top_sources = [f"{chunk.doc_name} p.{_display_page_text(chunk)}" for chunk, _ in top_items]
     pages_by_doc = _pages_by_document(unique)
     key_excerpt = _two_line_key_excerpt(top_items[0][0].text) if top_items else ""
 
@@ -441,12 +451,7 @@ def _render_final_answer_panel(query: str, unique) -> None:
     else:
         st.warning(panel["summary"])
 
-    if panel.get("key_excerpt"):
-        st.markdown("**Key excerpt from top citation**")
-        st.caption(panel["key_excerpt"])
-
     _render_summary_metrics(panel)
-    _render_final_summary_table(panel)
 
     _render_pages_reference(panel["pages_by_doc"])
 
@@ -464,7 +469,8 @@ def _render_results(unique) -> None:
 
     for idx, (chunk, score) in enumerate(unique, 1):
         is_ocr = chunk.metadata.get("source") == "image_ocr"
-        label = f"{_score_color(score)} **{chunk.doc_name}** · Page {chunk.page_num}"
+        page_text = _display_page_text(chunk)
+        label = f"{_score_color(score)} **{chunk.doc_name}** · Page {page_text}"
         if is_ocr:
             label += " · 🖼️ Image OCR"
 
@@ -479,7 +485,7 @@ def _render_results(unique) -> None:
                 with text_col:
                     st.markdown(_sentence_safe_excerpt(chunk.text))
                 with preview_col:
-                    st.markdown("**Page Preview**")
+                    st.markdown(f"**Page Preview (Page {_display_page_text(chunk)})**")
                     try:
                         st.image(preview_image, use_container_width=True)
                     except Exception:
@@ -522,7 +528,7 @@ def _render_formatted_results_table(query: str, unique) -> None:
             {
                 "Rank": idx,
                 "Source": chunk.doc_name,
-                "Page": chunk.page_num,
+                "Page": _display_page_text(chunk),
                 "Relevance": f"{score:.0%}",
                 "Snippet": _sentence_safe_excerpt(chunk.text),
             }
@@ -547,7 +553,7 @@ def _build_export_rows(query: str, unique) -> list:
                 "example query": query,
                 "rank": idx,
                 "document": chunk.doc_name,
-                "page": chunk.page_num,
+                "page": _display_page_text(chunk),
                 "score": round(score, 4),
                 "text": excerpt,
                 "exported_at": exported_at,
@@ -562,22 +568,24 @@ def _render_export_actions(export_rows: list) -> None:
     st.markdown("**Export results**")
 
     export_df = pd.DataFrame(export_rows)
-    col1, col2 = st.columns(2)
+    col1, col2, _ = st.columns([1, 1, 4])
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     with col1:
         st.download_button(
-            "⬇️ CSV",
+            "Download CSV",
             data=export_df.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"search_results_{ts}.csv",
             mime="text/csv",
-            use_container_width=True,
+            type="primary",
+            use_container_width=False,
         )
     with col2:
         st.download_button(
-            "⬇️ JSON",
+            "Download JSON",
             data=json.dumps(export_rows, indent=2, ensure_ascii=False).encode("utf-8"),
             file_name=f"search_results_{ts}.json",
             mime="application/json",
-            use_container_width=True,
+            type="primary",
+            use_container_width=False,
         )

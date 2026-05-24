@@ -6,7 +6,7 @@ from src.config.config_manager import config
 from src.retrieval.rag_pipeline import RAGPipeline
 
 
-@st.cache_resource(show_spinner="Loading search engine...")
+@st.cache_resource(show_spinner=False)
 def initialize_pipeline() -> RAGPipeline:
     """Initialize the RAG pipeline with Streamlit resource caching."""
     try:
@@ -69,7 +69,7 @@ def _load_documents(pipeline: RAGPipeline, uploaded_files: List, progress_bar, s
 
 def _generate_embeddings(pipeline: RAGPipeline, progress_bar, status_text) -> None:
     """Generate vector embeddings for loaded document chunks."""
-    status_text.text("Loading search engine...")
+    status_text.text("Generating embeddings...")
     progress_bar.progress(50)
     pipeline.generate_embeddings(batch_size=config.embedding_batch_size, show_progress=False)
 
