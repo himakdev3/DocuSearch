@@ -58,7 +58,6 @@ def _create_progress_widgets():
 
 def _load_documents(pipeline: RAGPipeline, uploaded_files: List, progress_bar, status_text) -> bool:
     """Load uploaded documents and validate extracted content."""
-    status_text.text("Loading documents...")
     progress_bar.progress(20)
     num_chunks = pipeline.load_documents_from_files(uploaded_files)
     if num_chunks == 0:
@@ -69,7 +68,6 @@ def _load_documents(pipeline: RAGPipeline, uploaded_files: List, progress_bar, s
 
 def _generate_embeddings(pipeline: RAGPipeline, progress_bar, status_text) -> None:
     """Generate vector embeddings for loaded document chunks."""
-    status_text.text("Generating embeddings...")
     progress_bar.progress(50)
     pipeline.generate_embeddings(batch_size=config.embedding_batch_size, show_progress=False)
 

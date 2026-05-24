@@ -54,6 +54,9 @@ _QUERY_STOPWORDS = {
     "was", "what", "when", "where", "which", "who", "why", "with", "you",
 }
 
+_MIN_RESULT_CHARS = 50
+_MIN_RESULT_WORDS = 8
+
 
 @dataclass
 class DocumentChunk:
@@ -835,6 +838,23 @@ class RAGPipeline:
             penalty += 0.05
 
         return min(penalty, 0.2)
+
+    def _low_information_penalty(self, text: str) -> float:
+        """Penalize fragment-like snippets that are too short or incomplete to be useful evidence."""
+        collapsed = re.sub(r"\s+", " ", (text or "")).strip()
+        if not collapsed:
+            return 0.25
+
+        words = re.findall(r"[A-Za-z0-9']+", collapsed)
+        if len(collapsed) < _MIN_RESULT_CHARS or len(words) < _MIN_RESULT_WORDS:
+            return 0.25
+
+        # Mid-word tails like "... which ha" are strong indicators of broken chunks.
+        if len(words) >= 1 and collapsed[-1].isalpha() and collapsed[-1] not in ".!?":
+            if len(collapsed) < 120:
+                return 0.15
+
+        return 0.0
     
     def generate_embeddings(self, batch_size: int = 32, show_progress: bool = True) -> None:
         """
@@ -992,9 +1012,19 @@ class RAGPipeline:
                 if idx < 0:
                     continue
                 chunk = self.documents[idx]
+                low_info_penalty = self._low_information_penalty(chunk.text)
+                if low_info_penalty >= 0.25:
+                    continue
+
                 lexical_score = self._lexical_overlap_score(query_terms, chunk.text)
+
+                # Guardrail: if lexical overlap is absent and semantic score is not very strong,
+                # treat it as likely off-topic for user-facing ranking.
+                if query_terms and lexical_score == 0.0 and float(vector_score) < 0.70:
+                    continue
+
                 noise_penalty = self._noise_penalty(chunk.text)
-                combined_score = (0.82 * float(vector_score)) + (0.25 * lexical_score) - noise_penalty
+                combined_score = (0.72 * float(vector_score)) + (0.38 * lexical_score) - noise_penalty - low_info_penalty
                 combined_score = max(0.0, min(1.0, combined_score))
                 reranked.append((chunk, combined_score))
 

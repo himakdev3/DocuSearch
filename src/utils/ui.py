@@ -19,6 +19,8 @@ _ENCODING_FIXES = {
     "incontext": "in-context",
 }
 
+_MIN_FINAL_ANSWER_CHARS = 50
+
 
 def _score_color(score: float) -> str:
     if score >= 0.55:
@@ -232,29 +234,66 @@ def _query_terms(query: str) -> set:
     return {t for t in tokens if len(t) >= 3}
 
 
-def _best_sentence_for_query(text: str, terms: set) -> str:
-    """Pick the sentence that best matches query terms."""
+def _detect_query_intent(query: str) -> str:
+    """Infer a broad answer intent from query phrasing.
+
+    Returns one of: list, explanatory, factoid, general.
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return "general"
+
+    # Generic intent cues based on common question framing.
+    if re.search(r"\b(list|types|kinds|categories|examples|different)\b", q):
+        return "list"
+    if re.search(r"\b(how|why|explain|describe|difference|compare)\b", q):
+        return "explanatory"
+    if re.search(r"\b(what|which|who|when|where)\b", q):
+        return "factoid"
+    return "general"
+
+
+def _is_sentence_complete(sentence: str) -> bool:
+    """Heuristic to reject visibly truncated answer sentences."""
+    s = (sentence or "").strip()
+    if len(s) < _MIN_FINAL_ANSWER_CHARS:
+        return False
+    return s.endswith((".", "!", "?"))
+
+
+def _evidence_quality_score(
+    avg_relevance: float,
+    query_term_coverage: float,
+    complete_sentence_ratio: float,
+    source_diversity_ratio: float,
+) -> float:
+    """Compute an evidence-calibrated confidence score in [0, 1]."""
+    quality = (
+        (0.45 * avg_relevance)
+        + (0.30 * query_term_coverage)
+        + (0.15 * complete_sentence_ratio)
+        + (0.10 * source_diversity_ratio)
+    )
+    return max(0.0, min(1.0, quality))
+
+
+def _best_sentence_for_query(text: str, terms: set) -> tuple[str, int]:
+    """Pick the best query-aligned sentence and return (sentence, overlap_count)."""
     sentences = [sentence for sentence in _split_sentences(text) if _is_summary_candidate(sentence)]
     if not sentences:
-        return ""
+        return "", 0
 
     def sentence_score(sentence: str) -> tuple:
         normalized = _normalize_summary_sentence(sentence)
         lowered = normalized.lower()
         words = set(re.findall(r"[A-Za-z0-9]+", lowered))
         overlap = len(words & terms) if terms else 0
-        explanatory_bonus = 0
-        if "try-except" in lowered or ("try" in words and "except" in words):
-            explanatory_bonus += 3
-        if "can be handled" in lowered or "handled explicitly" in lowered:
-            explanatory_bonus += 2
-        if "exception is generated" in lowered or "program will be terminated" in lowered:
-            explanatory_bonus += 1
-        if any(term in words for term in {"works", "work", "handling", "exception"}):
-            explanatory_bonus += 1
-        return overlap + explanatory_bonus, len(normalized)
+        coverage = overlap / max(len(terms), 1) if terms else 0.0
+        return overlap, coverage, len(normalized)
 
-    return _normalize_summary_sentence(max(sentences, key=sentence_score))
+    best = max(sentences, key=sentence_score)
+    best_overlap = sentence_score(best)[0]
+    return _normalize_summary_sentence(best), best_overlap
 
 
 def _confidence_label(score: float) -> str:
@@ -394,18 +433,60 @@ def _render_citation_summary_table(unique) -> None:
 def _build_final_answer(query: str, unique) -> dict:
     """Create an answer summary plus confidence and source coverage details."""
     top_items = unique[:5]
+    intent = _detect_query_intent(query)
     terms = _query_terms(query)
     selected_sentences = []
+    evidence_overlaps = []
+    matched_terms = set()
+    complete_count = 0
 
     for chunk, _ in top_items:
         excerpt = _sentence_safe_excerpt(chunk.text)
-        sentence = _best_sentence_for_query(excerpt, terms)
-        if sentence and sentence not in selected_sentences:
+        sentence, overlap = _best_sentence_for_query(excerpt, terms)
+        if sentence and overlap > 0 and sentence not in selected_sentences:
             selected_sentences.append(sentence)
+            evidence_overlaps.append(overlap)
+            if _is_sentence_complete(sentence):
+                complete_count += 1
+
+            if terms:
+                sentence_terms = set(re.findall(r"[A-Za-z0-9]+", sentence.lower()))
+                matched_terms |= (sentence_terms & terms)
 
     avg_top_score = sum(score for _, score in top_items) / max(len(top_items), 1)
+    overlap_ready = bool(evidence_overlaps) and (max(evidence_overlaps) >= 1)
+    query_term_coverage = (len(matched_terms) / len(terms)) if terms else 0.0
+    complete_sentence_ratio = (complete_count / len(selected_sentences)) if selected_sentences else 0.0
+    unique_docs = {chunk.doc_name for chunk, _ in unique}
+    source_diversity_ratio = min(1.0, len(unique_docs) / max(len(top_items), 1))
+    confidence_score = _evidence_quality_score(
+        avg_relevance=avg_top_score,
+        query_term_coverage=query_term_coverage,
+        complete_sentence_ratio=complete_sentence_ratio,
+        source_diversity_ratio=source_diversity_ratio,
+    )
 
-    if selected_sentences and avg_top_score >= 0.45:
+    meets_intent_quality = False
+    if intent == "list":
+        meets_intent_quality = (
+            len(selected_sentences) >= 2
+            and query_term_coverage >= 0.25
+            and complete_sentence_ratio >= 0.5
+        )
+    elif intent == "explanatory":
+        meets_intent_quality = (
+            len(selected_sentences) >= 1
+            and query_term_coverage >= 0.15
+            and complete_sentence_ratio >= 0.5
+        )
+    else:
+        meets_intent_quality = (
+            len(selected_sentences) >= 1
+            and query_term_coverage >= 0.12
+            and complete_sentence_ratio >= 0.5
+        )
+
+    if selected_sentences and overlap_ready and confidence_score >= 0.40 and meets_intent_quality:
         summary = " ".join(selected_sentences[:2])
         summary_is_generated = True
     else:
@@ -417,10 +498,17 @@ def _build_final_answer(query: str, unique) -> dict:
         )
         summary_is_generated = False
 
+    if len(summary) < _MIN_FINAL_ANSWER_CHARS:
+        best_locations = ", ".join(f"{chunk.doc_name} p.{_display_page_text(chunk)}" for chunk, _ in top_items[:3])
+        summary = (
+            "Top matches were too short or weakly aligned with your question. "
+            f"Review these passages: {best_locations}."
+        )
+        summary_is_generated = False
+
     if len(summary) > 420:
         summary = summary[:417].rstrip() + "..."
 
-    unique_docs = {chunk.doc_name for chunk, _ in unique}
     unique_pages = {(chunk.doc_name, chunk.page_num) for chunk, _ in unique}
     top_sources = [f"{chunk.doc_name} p.{_display_page_text(chunk)}" for chunk, _ in top_items]
     pages_by_doc = _pages_by_document(unique)
@@ -430,8 +518,8 @@ def _build_final_answer(query: str, unique) -> dict:
         "summary": summary,
         "summary_is_generated": summary_is_generated,
         "key_excerpt": key_excerpt,
-        "confidence_score": avg_top_score,
-        "confidence_label": _confidence_label(avg_top_score),
+        "confidence_score": confidence_score,
+        "confidence_label": _confidence_label(confidence_score),
         "doc_count": len(unique_docs),
         "page_count": len(unique_pages),
         "summary_evidence_count": len(top_items),

@@ -11,12 +11,13 @@ __pycache__/
 # Environment variables (keep .env.example, ignore actual .env)
 .env
 
-# Output / logs
-output/logs/
-output/plots/
+# Generated/output folders
+output/
 
-# Data uploads (don't commit user documents)
-data/pdfs/
+# Local data and optional assets
+data/
+resources/
+notebooks/
 
 # OS artefacts
 .DS_Store
