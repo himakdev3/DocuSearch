@@ -2,27 +2,74 @@
 .venv/
 venv/
 env/
+.python-version
 
 # Python cache
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyd
+*.so
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+
+# Coverage and test artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+test-results/
+.tox/
+.nox/
 
 # Environment variables (keep .env.example, ignore actual .env)
 .env
+.env.*
+!.env.example
+
+# Streamlit/local app secrets
+.streamlit/secrets.toml
 
 # Generated/output folders
 output/
+logs/
+tmp/
+temp/
 
 # Local data and optional assets
 data/
 resources/
 notebooks/
+.ipynb_checkpoints/
+
+# Packaging/build
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
 
 # OS artefacts
 .DS_Store
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+.TemporaryItems/
+Icon?
 Thumbs.db
+desktop.ini
 
 # IDE
 .vscode/
 .idea/
+
+# Manual local test artifacts
+manual_tests/generated_sources/
+manual_tests/generated_large_sources/
