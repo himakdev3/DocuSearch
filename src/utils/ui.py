@@ -59,7 +59,7 @@ def _display_page_text(chunk) -> str:
 def search_interface(pipeline, top_k, min_similarity_threshold: float = 0.0):
     """Render search controls, results, and export actions."""
     query = st.text_input(
-        "What would you like to know?",
+        "What would you like to search?",
         placeholder="e.g. What does this document say about key policies?",
         key="search_query",
     )
@@ -533,7 +533,7 @@ def _render_final_answer_panel(query: str, unique) -> None:
     """Render a concise synthesized answer with confidence and coverage."""
     panel = _build_final_answer(query, unique)
 
-    st.markdown("### Final Answer")
+    st.markdown("### Search Summary")
     if panel["summary_is_generated"]:
         st.info(panel["summary"])
     else:
