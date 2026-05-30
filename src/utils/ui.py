@@ -60,7 +60,7 @@ def search_interface(pipeline, top_k, min_similarity_threshold: float = 0.0):
     """Render search controls, results, and export actions."""
     query = st.text_input(
         "What would you like to search?",
-        placeholder="e.g. What does this document say about key policies?",
+        placeholder="e.g. Find condional statements from the documents?",
         key="search_query",
     )
     if st.button("Search", key="search_button", type="primary") and query:

@@ -20,7 +20,7 @@ def run_streamlit_app() -> None:
     if st.session_state.get("pipeline_ready", False) and pipeline is not None:
         search_interface(pipeline, config.default_top_k, config.min_similarity_threshold)
     else:
-        st.info("Upload documents, click Process Documents, then ask your question.")
+        st.info("Upload documents, click Process Documents, then search across documents.")
 
 
 # ---------------------------------------------------------------------------
